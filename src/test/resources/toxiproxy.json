@@ -1,0 +1,8 @@
+[
+  {
+    "name": "localstack",
+    "listen": "0.0.0.0:8666",
+    "upstream": "localstack:4566",
+    "enabled": true
+  }
+]
