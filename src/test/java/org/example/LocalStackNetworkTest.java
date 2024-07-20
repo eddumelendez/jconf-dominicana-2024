@@ -13,14 +13,18 @@ import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3ClientBuilder;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 @Testcontainers
 class LocalStackNetworkTest {
@@ -43,20 +47,30 @@ class LocalStackNetworkTest {
 
     @Test
     void test() throws URISyntaxException {
-        assertBucketCreation();
+        S3Client s3 = buildS3Client();
+
+        assertThat(s3.listBuckets().buckets()).hasSize(1);
+        assertThat(s3.listBuckets().buckets().get(0).name()).isEqualTo("test-bucket");
+
     }
 
     @Test
     void withLatency() throws Exception {
         execute("./toxiproxy-cli toxic add -t latency --downstream -a latency=1600 -a jitter=100 -n latency_downstream localstack");
 
-        assertBucketCreation();
+        S3Client s3 = buildS3Client(true);
+        assertThatExceptionOfType(ApiCallTimeoutException.class)
+                .isThrownBy(() -> s3.listBuckets().buckets());
 
         execute("./toxiproxy-cli toxic remove -n latency_downstream localstack");
     }
 
-    void assertBucketCreation() throws URISyntaxException {
-        S3Client s3 = S3Client
+    S3Client buildS3Client() throws URISyntaxException {
+        return buildS3Client(false);
+    }
+
+    S3Client buildS3Client(boolean enableTimeout) throws URISyntaxException {
+        S3ClientBuilder s3ClientBuilder = S3Client
                 .builder()
                 .endpointOverride(new URI("http://%s:%d".formatted(toxiproxy.getHost(), toxiproxy.getMappedPort(8666))))
                 .credentialsProvider(
@@ -64,11 +78,12 @@ class LocalStackNetworkTest {
                                 AwsBasicCredentials.create(localstack.getAccessKey(), localstack.getSecretKey())
                         )
                 )
-                .region(Region.of(localstack.getRegion()))
-                .build();
+                .region(Region.of(localstack.getRegion()));
+        if (enableTimeout) {
+            s3ClientBuilder = s3ClientBuilder.overrideConfiguration(b -> b.apiCallTimeout(Duration.ofMillis(100)));
+        }
 
-        assertThat(s3.listBuckets().buckets()).hasSize(1);
-        assertThat(s3.listBuckets().buckets().get(0).name()).isEqualTo("test-bucket");
+        return s3ClientBuilder.build();
     }
 
     private static void execute(String command) throws Exception {
